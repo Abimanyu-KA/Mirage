@@ -2,14 +2,15 @@
 
 import { useState } from "react";
 import axios from "axios";
-import { Upload, Lock, FileImage, Eye, AlertTriangle } from "lucide-react";
+import { Upload, Lock, FileImage, ArrowRight, FileText, Download, ShieldAlert, File as FileIcon } from "lucide-react";
 
 export default function DecodePage() {
   const [file, setFile] = useState<File | null>(null);
   const [pin, setPin] = useState("");
-  const [result, setResult] = useState<string | null>(null);
-  const [glitchUrl, setGlitchUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  
+  // The result can be Text OR a File object
+  const [result, setResult] = useState<any>(null);
 
   const handleDecode = async () => {
     if (!file || !pin) {
@@ -18,134 +19,202 @@ export default function DecodePage() {
     }
 
     setLoading(true);
-    setResult(null);
-    setGlitchUrl(null);
+    setResult(null); // Reset previous results
 
     const formData = new FormData();
     formData.append("file", file);
     formData.append("pin", pin);
-    formData.append("mode", "secret");
 
     try {
-      // We don't know if we will get JSON or an Image yet.
-      // So we ask for 'blob' (raw data) and check the type later.
       const response = await axios.post("/api/decode", formData, {
-        responseType: "blob",
+        // We expect JSON now, unless the PIN is wrong (then we get a blob image)
+        // But axios is tricky. If the backend returns an image (glitch), it might look like text garbage.
+        // Strategy: We request 'blob' so we can handle images, then try to parse text if it's not an image.
+        responseType: "blob", 
       });
 
       const contentType = response.headers["content-type"];
 
-      if (contentType.includes("application/json")) {
-        // SCENARIO A: SUCCESS (It's JSON)
-        // We have to convert the blob back to text to read the JSON
-        const textData = await response.data.text();
-        const jsonData = JSON.parse(textData);
-        setResult(jsonData.message);
-      } else {
-        // SCENARIO B: FAILURE (It's an Image / Glitch)
-        // Create a URL for the glitched image
+      // CASE A: GLITCH ART (Wrong PIN)
+      if (contentType && contentType.includes("image")) {
         const url = window.URL.createObjectURL(new Blob([response.data]));
-        setGlitchUrl(url);
+        setResult({ type: "glitch", url: url });
+      } 
+      
+      // CASE B: SUCCESS (JSON Data)
+      else {
+        // Convert Blob -> Text -> JSON
+        const textData = await response.data.text();
+        try {
+            const data = JSON.parse(textData);
+            setResult(data);
+        } catch (e) {
+            // Fallback if parsing fails
+            console.error("Parse error", e);
+            alert("Decryption failed or returned invalid data.");
+        }
       }
 
     } catch (error) {
-      console.error("Decode failed", error);
-      alert("System Error. The engine could not process this file.");
+      console.error("Decoding failed", error);
+      alert("System Error.");
     } finally {
       setLoading(false);
     }
   };
 
+  // Helper to trigger download of the hidden file
+  const downloadSecretFile = () => {
+    if (!result || result.type !== 'file') return;
+    
+    // 1. Decode Base64 content
+    const byteCharacters = atob(result.content);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    
+    // 2. Create Blob & Link
+    const blob = new Blob([byteArray]);
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = result.filename || "secret_file";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
-    <main className="min-h-screen bg-black text-red-500 p-8 flex flex-col items-center">
-      <h1 className="text-4xl font-bold mb-12 tracking-tighter">DECODE PROTOCOL</h1>
+    <main className="min-h-screen bg-black text-green-500 p-8 flex flex-col items-center font-mono">
+      <h1 className="text-4xl font-bold mb-8 tracking-tighter text-white">DECODE PROTOCOL</h1>
 
-      {/* RESULT AREA */}
-      {result && (
-        <div className="w-full max-w-md p-6 border border-green-500 bg-green-900/10 text-green-500 rounded animate-in fade-in slide-in-from-bottom-4">
-          <h2 className="text-sm font-mono opacity-70 mb-2">DECRYPTED PAYLOAD:</h2>
-          <p className="text-xl font-mono break-all">{result}</p>
-        </div>
-      )}
-
-      {glitchUrl && (
-        <div className="w-full max-w-md text-center animate-in zoom-in duration-300">
-           <div className="p-4 border border-red-600 bg-red-900/20 rounded mb-4">
-             <div className="flex items-center justify-center gap-2 mb-2 text-red-500 font-bold">
-               <AlertTriangle /> ACCESS DENIED
+      {/* RESULT SECTION */}
+      {result ? (
+        <div className="w-full max-w-xl animate-in zoom-in duration-300">
+           
+           {/* GLITCH RESULT (Wrong PIN) */}
+           {result.type === "glitch" && (
+             <div className="text-center">
+               <div className="border border-red-500/50 p-2 rounded mb-4 bg-red-900/10">
+                 <p className="text-red-500 font-bold tracking-widest">ACCESS DENIED</p>
+                 <p className="text-xs text-red-400 opacity-70">Security protocol triggered. Payload incinerated.</p>
+               </div>
+               <img src={result.url} alt="Glitch" className="w-full rounded border border-gray-800 opacity-80" />
+               <button onClick={() => window.location.reload()} className="mt-6 text-gray-500 underline text-sm">Try Again</button>
              </div>
-             <p className="text-xs font-mono opacity-80">
-               Incorrect PIN. Security protocol initiated. 
-               Data corrupted.
-             </p>
-           </div>
-           {/* eslint-disable-next-line @next/next/no-img-element */}
-           <img src={glitchUrl} alt="Glitch" className="w-full rounded border border-red-900" />
+           )}
+
+           {/* TEXT RESULT */}
+           {result.type === "text" && (
+             <div className={`p-8 rounded-lg border relative ${result.is_decoy ? 'border-red-500 bg-red-900/10' : 'border-green-500 bg-green-900/10'}`}>
+                {result.is_decoy && (
+                    <div className="absolute top-0 right-0 bg-red-600 text-black text-[10px] font-bold px-2 py-1 rounded-bl flex items-center gap-1">
+                        <ShieldAlert size={12} /> DECOY DETECTED
+                    </div>
+                )}
+                <h3 className={`text-sm font-bold mb-4 flex items-center gap-2 ${result.is_decoy ? 'text-red-400' : 'text-green-400'}`}>
+                    <FileText size={18} /> DECRYPTED PAYLOAD:
+                </h3>
+                <p className="text-white text-lg whitespace-pre-wrap leading-relaxed">{result.message}</p>
+                
+                <button 
+                    onClick={() => window.location.reload()} 
+                    className="mt-8 w-full py-3 bg-gray-900 text-gray-400 text-sm font-bold rounded hover:bg-gray-800"
+                >
+                    DECODE ANOTHER
+                </button>
+             </div>
+           )}
+
+           {/* FILE RESULT */}
+           {result.type === "file" && (
+             <div className={`p-8 rounded-lg border relative ${result.is_decoy ? 'border-red-500 bg-red-900/10' : 'border-blue-500 bg-blue-900/10'}`}>
+                {result.is_decoy && (
+                    <div className="absolute top-0 right-0 bg-red-600 text-black text-[10px] font-bold px-2 py-1 rounded-bl">
+                        DECOY DETECTED
+                    </div>
+                )}
+                <div className="text-center py-6">
+                    <div className={`mx-auto w-16 h-16 rounded-full flex items-center justify-center mb-4 ${result.is_decoy ? 'bg-red-900/30 text-red-400' : 'bg-blue-900/30 text-blue-400'}`}>
+                        <FileIcon size={32} />
+                    </div>
+                    <h3 className="text-xl font-bold text-white mb-1">{result.filename}</h3>
+                    <p className="text-xs opacity-60 mb-6">Hidden File Extracted Successfully</p>
+                    
+                    <button 
+                        onClick={downloadSecretFile}
+                        className={`px-8 py-3 rounded font-bold flex items-center gap-2 mx-auto transition-all ${
+                            result.is_decoy 
+                            ? 'bg-red-600 text-black hover:bg-red-500' 
+                            : 'bg-blue-600 text-white hover:bg-blue-500 shadow-[0_0_15px_rgba(37,99,235,0.4)]'
+                        }`}
+                    >
+                        <Download size={18} /> DOWNLOAD FILE
+                    </button>
+                </div>
+                <button 
+                    onClick={() => window.location.reload()} 
+                    className="mt-6 w-full text-center text-xs opacity-40 hover:opacity-100"
+                >
+                    Decode Another
+                </button>
+             </div>
+           )}
+
         </div>
-      )}
-
-      {/* INPUT FORM (Only show if no result is displayed) */}
-      {!result && !glitchUrl && (
-        <div className="w-full max-w-md space-y-8 mt-8">
-          
-          {/* 1. Image Upload */}
-          <div className="border-2 border-dashed border-red-900 rounded-lg p-8 text-center hover:border-red-500 transition-colors cursor-pointer relative">
-            <input
-              type="file"
-              accept="image/*"
-              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-              onChange={(e) => setFile(e.target.files?.[0] || null)}
-            />
-            <div className="flex flex-col items-center gap-2">
-              {file ? (
-                <>
-                  <FileImage size={40} />
-                  <span className="font-mono text-sm">{file.name}</span>
-                </>
-              ) : (
-                <>
-                  <Upload size={40} className="opacity-50" />
-                  <span className="opacity-50 font-mono text-sm">UPLOAD STEGO-IMAGE</span>
-                </>
-              )}
+      ) : (
+        <div className="w-full max-w-md space-y-6">
+            {/* UPLOAD INPUT (Fast Version) */}
+            <div className="border-2 border-dashed border-gray-700 rounded-lg p-8 text-center hover:border-green-500 transition-colors cursor-pointer relative bg-gray-900/30 group">
+                <input
+                    type="file"
+                    accept=".png" // Stego images are usually PNG
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    onChange={(e) => setFile(e.target.files?.[0] || null)}
+                />
+                <div className="flex flex-col items-center gap-3 group-hover:scale-105 transition-transform">
+                    {file ? (
+                        <>
+                        <FileImage size={40} className="text-green-400" />
+                        <span className="font-bold text-sm text-white">{file.name}</span>
+                        </>
+                    ) : (
+                        <>
+                        <Upload size={40} className="opacity-40" />
+                        <span className="opacity-40 text-sm">UPLOAD STEGO-IMAGE</span>
+                        </>
+                    )}
+                </div>
             </div>
-          </div>
 
-          {/* 2. PIN Input */}
-          <div>
-            <label className="block text-xs font-mono mb-2 opacity-70">DECRYPTION PIN</label>
-            <div className="relative">
-              <Lock className="absolute left-3 top-3 text-red-700" size={18} />
-              <input
-                type="text"
-                maxLength={4}
-                className="w-full bg-black border border-red-900 rounded p-3 pl-10 text-red-500 focus:border-red-500 outline-none font-mono tracking-widest"
-                placeholder="0000"
-                value={pin}
-                onChange={(e) => setPin(e.target.value)}
-              />
+            {/* PIN INPUT */}
+            <div>
+                <label className="block text-xs mb-2 opacity-70">DECRYPTION PIN</label>
+                <div className="relative">
+                    <Lock className="absolute left-3 top-3 text-green-700" size={18} />
+                    <input
+                        type="text"
+                        maxLength={8}
+                        className="w-full bg-black border border-green-900 rounded p-3 pl-10 text-green-500 outline-none focus:border-green-500 tracking-[0.5em] font-bold text-center placeholder-green-900"
+                        placeholder="0000"
+                        value={pin}
+                        onChange={(e) => setPin(e.target.value)}
+                    />
+                </div>
             </div>
-          </div>
 
-          {/* Action Button */}
-          <button
-            onClick={handleDecode}
-            disabled={loading}
-            className="w-full py-4 bg-red-900/30 border border-red-600 text-red-500 hover:bg-red-600 hover:text-black font-bold tracking-widest transition-all flex justify-center items-center gap-2"
-          >
-            {loading ? "DECRYPTING..." : "REVEAL MESSAGE"}
-            {!loading && <Eye size={18} />}
-          </button>
+            {/* ACTION BUTTON */}
+            <button
+                onClick={handleDecode}
+                disabled={loading}
+                className="w-full py-4 border border-green-600 text-green-500 font-bold tracking-widest hover:bg-green-600 hover:text-black transition-all rounded flex justify-center items-center gap-2 mt-4"
+            >
+                {loading ? "ANALYZING..." : "REVEAL SECRETS"}
+                {!loading && <ArrowRight size={18} />}
+            </button>
         </div>
-      )}
-      
-      {(result || glitchUrl) && (
-        <button 
-            onClick={() => window.location.reload()} 
-            className="block mt-12 text-sm underline hover:text-white"
-        >
-            Decode Another
-        </button>
       )}
     </main>
   );

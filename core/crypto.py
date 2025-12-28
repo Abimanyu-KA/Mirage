@@ -1,51 +1,70 @@
 import os
 import base64
-from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 class CryptoManager:
     def __init__(self):
-        pass
+        # AES-GCM requires a 12-byte nonce
+        self.nonce_len = 12
 
-    def derive_key(self, pin: str, salt: bytes = None):
-        """
-        Turns a PIN into a 32-byte URL-safe key using PBKDF2.
-        """
-        if salt is None:
-            # Generate a new random 16-byte salt if encoding
-            salt = os.urandom(16)
-        
-        # PBKDF2: Industry standard for hashing passwords
+    def _derive_key(self, pin: str, salt: bytes) -> bytes:
+        """Derives a 32-byte (256-bit) AES key from the PIN using PBKDF2."""
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
             salt=salt,
             iterations=100000,
         )
-        
-        key = base64.urlsafe_b64encode(kdf.derive(pin.encode()))
-        return key, salt
+        return kdf.derive(pin.encode())
 
-    def encrypt(self, message: str, pin: str):
-        # 1. Derive key
-        key, salt = self.derive_key(pin)
-        f = Fernet(key)
+    def encrypt(self, data, pin: str):
+        """
+        Encrypts text OR bytes.
+        Returns: (salt, encrypted_data)
+        """
+        # 1. Generate a random salt
+        salt = os.urandom(16)
         
-        # 2. Encrypt
-        encrypted_data = f.encrypt(message.encode())
+        # 2. Derive the key
+        key = self._derive_key(pin, salt)
         
-        # 3. Return salt (needed for decrypt) + data
-        return salt, encrypted_data
+        # 3. Prepare data (The Fix: Handle both str and bytes)
+        if isinstance(data, str):
+            data_bytes = data.encode('utf-8')
+        elif isinstance(data, bytes):
+            data_bytes = data
+        else:
+            raise ValueError("Data must be string or bytes.")
+
+        # 4. Encrypt using AES-GCM
+        aesgcm = AESGCM(key)
+        nonce = os.urandom(self.nonce_len)
+        ciphertext = aesgcm.encrypt(nonce, data_bytes, None)
+        
+        # Return: salt, (nonce + ciphertext)
+        # We need the nonce to decrypt, so we prepend it to the ciphertext
+        return salt, nonce + ciphertext
 
     def decrypt(self, salt: bytes, encrypted_data: bytes, pin: str):
-        # 1. Re-derive key
-        key, _ = self.derive_key(pin, salt)
-        f = Fernet(key)
-        
+        """
+        Decrypts data. Returns bytes (to support files/compression).
+        """
         try:
-            # 2. Attempt decrypt
-            return f.decrypt(encrypted_data).decode()
+            # 1. Derive the key again
+            key = self._derive_key(pin, salt)
+            
+            # 2. Split nonce and ciphertext
+            nonce = encrypted_data[:self.nonce_len]
+            ciphertext = encrypted_data[self.nonce_len:]
+            
+            # 3. Decrypt
+            aesgcm = AESGCM(key)
+            decrypted_bytes = aesgcm.decrypt(nonce, ciphertext, None)
+            
+            return decrypted_bytes # Return raw bytes!
+            
         except Exception:
-            # Wrong PIN or corrupted data
+            # If PIN is wrong or data is corrupt, this fails
             return None

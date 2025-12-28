@@ -1,12 +1,14 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google"; // Or whatever font is there
+import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import Navbar from "@/components/Navbar"; // <--- 1. Import it
 
-const inter = Inter({ subsets: ["latin"] });
+// Load a cool tech font (optional, if you haven't already)
+const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono" });
 
 export const metadata: Metadata = {
-  title: "Mirage",
-  description: "Secure Steganography",
+  title: "Mirage Protocol",
+  description: "Steganography & Encryption Suite",
 };
 
 export default function RootLayout({
@@ -16,9 +18,13 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      {/* ADD THIS PROP BELOW: */}
-      <body className={inter.className} suppressHydrationWarning>
-        {children}
+      <body className={`${mono.variable} font-sans bg-black text-white`}>
+        <Navbar /> {/* <--- 2. Add it here */}
+        
+        {/* Add padding-top (pt-20) so content isn't hidden behind the fixed navbar */}
+        <div className="pt-20">
+          {children}
+        </div>
       </body>
     </html>
   );
